@@ -7,17 +7,57 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String
-  role      Role     @default(USER)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 enum Role {
   ADMIN
   LEAD
   USER
+}
+
+model User {
+  id       String @id @default(cuid())
+
+  username String @unique
+  email    String @unique
+  password String
+  role     Role   @default(USER)
+
+  // Self relation: LEAD -> members, USER -> teamLead
+  teamLeadId String?
+  teamLead   User?   @relation("LeadMembers", fields: [teamLeadId], references: [id])
+  members    User[]  @relation("LeadMembers")
+
+  // Activation
+  isActive      Boolean   @default(true)
+  deactivatedAt DateTime?
+
+  // Attendance relation (NEW)
+  attendances Attendance[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@index([teamLeadId])
+  @@index([isActive])
+}
+
+model Attendance {
+  id          String   @id @default(cuid())
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Date bucket for reporting (stored as 00:00 UTC)
+  day         DateTime
+
+  checkInAt   DateTime
+  checkOutAt  DateTime?
+  workMinutes Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, day])
+  @@index([userId, day])
+  @@index([day])
 }
