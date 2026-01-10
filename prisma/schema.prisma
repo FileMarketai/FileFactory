@@ -1,6 +1,5 @@
 generator client {
   provider = "prisma-client-js"
-  previewFeatures = ["clientExtensions"]
 }
 
 datasource db {
@@ -9,8 +8,16 @@ datasource db {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  name      String
+  id        String   @id @default(cuid())
   email     String   @unique
+  password  String
+  role      Role     @default(USER)
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum Role {
+  ADMIN
+  LEAD
+  USER
 }
