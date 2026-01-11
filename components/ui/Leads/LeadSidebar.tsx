@@ -27,7 +27,7 @@ export default function Sidebar() {
   const main: NavItem[] = useMemo(
     () => [
       { name: "Dashboard", link: "/leaddashboard", icon: <MdDashboard /> },
-      { name: "Attendence", link: "/leadattendence", icon: <FiUsers /> },
+      { name: "Attendance", link: "/leadattendance", icon: <FiUsers /> },
       { name: "Tasks", link: "/profile", icon: <FaUserCircle /> },
       { name: "Payment History", link: "/paymenthistory", icon: <FaMoneyCheckAlt /> },
       { name: "Data", link: "/sendreport", icon: <FaFileAlt /> },

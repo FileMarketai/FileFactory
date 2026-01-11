@@ -37,19 +37,22 @@ export async function POST(req: Request) {
     const day = new Date(parsed.data.day + "T00:00:00.000Z");
     const now = new Date();
 
-    const row = await prisma.attendance.upsert({
-      where: { userId_day: { userId, day } }, // IMPORTANT: matches @@unique name
-      update: {}, // already checked in -> do nothing
-      create: {
-        userId,
-        day,
-        checkInAt: now,
-        checkOutAt: null,
-        workMinutes: 0,
-      },
+    const existing = await prisma.attendance.findUnique({
+      where: { userId_day: { userId, day } },
+      select: { id: true, checkInAt: true, checkOutAt: true },
     });
 
-    return NextResponse.json({ ok: true, id: row.id });
+    if (!existing) return NextResponse.json({ error: "No check-in found" }, { status: 400 });
+    if (existing.checkOutAt) return NextResponse.json({ error: "Already checked out" }, { status: 400 });
+
+    const mins = Math.max(0, Math.floor((now.getTime() - existing.checkInAt.getTime()) / 60000));
+
+    await prisma.attendance.update({
+      where: { id: existing.id },
+      data: { checkOutAt: now, workMinutes: mins },
+    });
+
+    return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }

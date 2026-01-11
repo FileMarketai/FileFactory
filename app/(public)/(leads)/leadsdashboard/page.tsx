@@ -43,35 +43,35 @@ export default async function LeadsDashboard() {
         {members.length === 0 ? (
           <p>No members assigned yet.</p>
         ) : (
-          <div style={{ display: "grid", gap: 10 }}>
-            {members.map((m) => (
+            <div style={{ display: "grid", gap: 10 }}>
+            {members.map((m: typeof members[number]) => (
               <div
-                key={m.id}
-                style={{
-                  padding: 12,
-                  border: "1px solid #eee",
-                  borderRadius: 8,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: 12,
-                }}
+              key={m.id}
+              style={{
+                padding: 12,
+                border: "1px solid #eee",
+                borderRadius: 8,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 12,
+              }}
               >
-                <div>
-                  <div style={{ fontWeight: 600 }}>{m.username}</div>
-                  <div style={{ fontSize: 14, opacity: 0.8 }}>{m.email}</div>
-                  <div style={{ fontSize: 14, marginTop: 4 }}>
-                    <b>Status:</b> {m.isActive ? "Active" : "Deactivated"}
-                    {!m.isActive && m.deactivatedAt
-                      ? ` (since ${new Date(m.deactivatedAt).toLocaleString()})`
-                      : ""}
-                  </div>
+              <div>
+                <div style={{ fontWeight: 600 }}>{m.username}</div>
+                <div style={{ fontSize: 14, opacity: 0.8 }}>{m.email}</div>
+                <div style={{ fontSize: 14, marginTop: 4 }}>
+                <b>Status:</b> {m.isActive ? "Active" : "Deactivated"}
+                {!m.isActive && m.deactivatedAt
+                  ? ` (since ${new Date(m.deactivatedAt).toLocaleString()})`
+                  : ""}
                 </div>
+              </div>
 
-                <MemberStatusButton memberId={m.id} isActive={m.isActive} />
+              <MemberStatusButton memberId={m.id} isActive={m.isActive} />
               </div>
             ))}
-          </div>
+            </div>
         )}
       </div>
 

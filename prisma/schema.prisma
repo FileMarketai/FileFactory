@@ -13,6 +13,12 @@ enum Role {
   USER
 }
 
+enum TodoStatus {
+  STATUS
+  INCOMPLETE
+  COMPLETE
+}
+
 model User {
   id       String @id @default(cuid())
 
@@ -30,8 +36,11 @@ model User {
   isActive      Boolean   @default(true)
   deactivatedAt DateTime?
 
-  // Attendance relation (NEW)
+  // Attendance
   attendances Attendance[]
+
+  // NEW: Todos
+  todos Todo[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -43,13 +52,10 @@ model User {
 
 model Attendance {
   id          String   @id @default(cuid())
-
   userId      String
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Date bucket for reporting (stored as 00:00 UTC)
-  day         DateTime
-
+  day         DateTime // store normalized day (00:00:00)
   checkInAt   DateTime
   checkOutAt  DateTime?
   workMinutes Int      @default(0)
@@ -57,7 +63,24 @@ model Attendance {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@unique([userId, day])
+  @@unique([userId, day], name: "userId_day")
+  @@index([userId, day])
+  @@index([day])
+}
+
+model Todo {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  day       DateTime   // normalized day (00:00:00)
+  title     String
+  note      String?
+  status    TodoStatus @default(STATUS)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   @@index([userId, day])
   @@index([day])
 }

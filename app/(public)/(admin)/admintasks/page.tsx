@@ -1,18 +1,18 @@
-// File: FileFactory/app/admindashboard/page.tsx
+// File: FileFactory/app/admintasks/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 
 /**
- * Admin view: Team-wise attendance across all Team Leads and Members.
- * UI vibe: soft cards + schedule-like layout (inspired by your previous pages + the image).
+ * Admin view: Team-wise TODOS across all Team Leads and Members.
  *
  * API contract (recommended):
- * GET /api/admin/attendance/teams?from=YYYY-MM-DD&to=YYYY-MM-DD&status=all|present|absent|checkedin&q=...&page=1&pageSize=10
+ * GET /api/admin/todos/teams?from=YYYY-MM-DD&to=YYYY-MM-DD&status=all|complete|incomplete|status&q=...&page=1&pageSize=6
  * Response:
  * {
- *   teams: TeamBlock[];
- *   totalTeams: number; // total number of leads/teams matching filters for pagination
+ *   teams: TeamTodoBlock[];
+ *   totalTeams: number;
+ *   overall?: { total, completed, incomplete, pending, completionRate }
  * }
  */
 
@@ -40,39 +40,64 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-type MemberAttendance = {
+type TodoStatus = "STATUS" | "INCOMPLETE" | "COMPLETE";
+
+type TodoItem = {
+  id: string;
+  title: string;
+  note?: string | null;
+  status: TodoStatus;
+  day: string; // YYYY-MM-DD (normalized)
+  createdAt: string;
+  updatedAt: string;
+};
+
+type MemberTodo = {
   userId: string;
   username: string;
   email: string;
 
-  // Aggregate over selected range
-  daysPresent: number;
-  daysAbsent: number;
-  totalWorkMinutes: number;
+  // Range aggregates
+  totalTodos: number;
+  completed: number;
+  incomplete: number;
+  pending: number;
+  completionRate: number;
 
-  // "Current day" status (optional but nice for quick scanning)
-  lastStatus?: "present" | "absent" | "checkedin" | "unknown";
-  lastCheckInAt?: string | null;
-  lastCheckOutAt?: string | null;
+  // Optional "latest" task snapshot (for quick scanning)
+  lastTodoStatus?: TodoStatus;
+  lastTodoTitle?: string | null;
+  lastUpdatedAt?: string | null;
+
+  todos: TodoItem[];
 };
 
-type TeamBlock = {
+type TeamTodoBlock = {
   leadId: string;
   leadUsername: string;
   leadEmail: string;
   membersCount: number;
 
-  // optional team-level aggregates
-  teamDaysPresent?: number;
-  teamDaysAbsent?: number;
-  teamWorkMinutes?: number;
+  // team-level range aggregates
+  teamTotalTodos: number;
+  teamCompleted: number;
+  teamIncomplete: number;
+  teamPending: number;
+  teamCompletionRate: number;
 
-  members: MemberAttendance[];
+  members: MemberTodo[];
 };
 
 type ApiResponse = {
-  teams: TeamBlock[];
+  teams: TeamTodoBlock[];
   totalTeams?: number;
+  overall?: {
+    total: number;
+    completed: number;
+    incomplete: number;
+    pending: number;
+    completionRate: number;
+  };
 };
 
 function pad2(n: number) {
@@ -81,43 +106,70 @@ function pad2(n: number) {
 function toISO(d: Date) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
-function minutesToHM(m: number) {
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  return `${h}h ${mm}m`;
-}
-function fmtTime(d: string | null | undefined) {
-  if (!d) return "-";
-  const dt = new Date(d);
-  return dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
 
-function StatusPill({ status }: { status: MemberAttendance["lastStatus"] }) {
-  const label =
-    status === "present"
-      ? "Present"
-      : status === "checkedin"
-        ? "Checked-in"
-        : status === "absent"
-          ? "Absent"
-          : "Unknown";
+function fmtDateTime(d: string | null | undefined) {
+  if (!d) return "-";
+  const dt = new Date(d);
+  return dt.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
+function statusLabel(s: TodoStatus) {
+  if (s === "COMPLETE") return "Complete";
+  if (s === "INCOMPLETE") return "Incomplete";
+  return "Status";
+}
+
+function StatusPill({ status }: { status: TodoStatus | undefined }) {
+  const s = status ?? "STATUS";
   const klass =
-    status === "present"
+    s === "COMPLETE"
       ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-      : status === "checkedin"
-        ? "bg-sky-50 text-sky-800 border-sky-200"
-        : status === "absent"
-          ? "bg-amber-50 text-amber-900 border-amber-200"
-          : "bg-slate-50 text-slate-700 border-slate-200";
+      : s === "INCOMPLETE"
+        ? "bg-rose-50 text-rose-800 border-rose-200"
+        : "bg-amber-50 text-amber-900 border-amber-200";
 
   return (
     <span className={cn("inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold", klass)}>
       <span className="h-2 w-2 rounded-full bg-current opacity-40" />
-      {label}
+      {statusLabel(s)}
+    </span>
+  );
+}
+
+function ProgressBar({ pct }: { pct: number }) {
+  const p = clamp(pct, 0, 100);
+  return (
+    <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+      <div className="h-2 rounded-full bg-slate-900" style={{ width: `${p}%` }} />
+    </div>
+  );
+}
+
+function SummaryChip({ label, value, tone }: { label: string; value: string; tone?: "slate" | "emerald" | "rose" | "amber" }) {
+  const cls =
+    tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : tone === "rose"
+        ? "border-rose-200 bg-rose-50 text-rose-900"
+        : tone === "amber"
+          ? "border-amber-200 bg-amber-50 text-amber-900"
+          : "border-slate-200 bg-white text-slate-800";
+
+  return (
+    <span className={cn("text-xs font-semibold rounded-full border px-2.5 py-1", cls)}>
+      {label}: {value}
     </span>
   );
 }
@@ -127,7 +179,7 @@ function TeamCard({
   expanded,
   onToggle,
 }: {
-  team: TeamBlock;
+  team: TeamTodoBlock;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -152,21 +204,15 @@ function TeamCard({
             </div>
 
             <div className="mt-2 flex items-center gap-2 flex-wrap">
-              {typeof team.teamWorkMinutes === "number" && (
-                <span className="text-xs rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">
-                  Total: {minutesToHM(team.teamWorkMinutes)}
-                </span>
-              )}
-              {typeof team.teamDaysPresent === "number" && (
-                <span className="text-xs rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-900">
-                  Present: {team.teamDaysPresent}
-                </span>
-              )}
-              {typeof team.teamDaysAbsent === "number" && (
-                <span className="text-xs rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-900">
-                  Absent: {team.teamDaysAbsent}
-                </span>
-              )}
+              <SummaryChip label="Todos" value={String(team.teamTotalTodos)} />
+              <SummaryChip label="Complete" value={String(team.teamCompleted)} tone="emerald" />
+              <SummaryChip label="Incomplete" value={String(team.teamIncomplete)} tone="rose" />
+              <SummaryChip label="Status" value={String(team.teamPending)} tone="amber" />
+              <SummaryChip label="Rate" value={`${team.teamCompletionRate}%`} />
+            </div>
+
+            <div className="mt-3 max-w-xs">
+              <ProgressBar pct={team.teamCompletionRate} />
             </div>
           </div>
 
@@ -174,7 +220,7 @@ function TeamCard({
             <span className="text-xs text-slate-500">{expanded ? "Hide" : "Show"} members</span>
             <span
               className={cn(
-                "h-9 w-9 grid place-items-center rounded-2xl border border-slate-200 bg-white shadow-sm",
+                "h-9 w-9 grid place-items-center rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform",
                 expanded ? "rotate-180" : "rotate-0"
               )}
             >
@@ -198,8 +244,8 @@ function TeamCard({
           <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
             <div className="grid grid-cols-12 gap-0 px-4 py-3 border-b border-slate-200 bg-slate-50/60">
               <div className="col-span-4 text-xs font-semibold text-slate-700">Member</div>
-              <div className="col-span-3 text-xs font-semibold text-slate-700">Status (latest)</div>
-              <div className="col-span-2 text-xs font-semibold text-slate-700">Check-in/out</div>
+              <div className="col-span-3 text-xs font-semibold text-slate-700">Latest</div>
+              <div className="col-span-2 text-xs font-semibold text-slate-700">Rate</div>
               <div className="col-span-3 text-xs font-semibold text-slate-700 text-right">Range totals</div>
             </div>
 
@@ -207,40 +253,7 @@ function TeamCard({
               <div className="px-4 py-8 text-sm text-slate-600 text-center">No members</div>
             ) : (
               team.members.map((m) => (
-                <div
-                  key={m.userId}
-                  className="grid grid-cols-12 gap-0 px-4 py-3 border-b border-slate-100 hover:bg-slate-50/50"
-                >
-                  <div className="col-span-4 min-w-0">
-                    <div className="text-sm font-semibold text-slate-900 truncate">{m.username}</div>
-                    <div className="text-xs text-slate-500 truncate">{m.email}</div>
-                  </div>
-
-                  <div className="col-span-3 flex items-center">
-                    <StatusPill status={m.lastStatus ?? "unknown"} />
-                  </div>
-
-                  <div className="col-span-2 text-sm text-slate-700 flex items-center gap-2">
-                    <span className="text-xs rounded-full border border-slate-200 bg-white px-2 py-1">
-                      In {fmtTime(m.lastCheckInAt)}
-                    </span>
-                    <span className="text-xs rounded-full border border-slate-200 bg-white px-2 py-1">
-                      Out {fmtTime(m.lastCheckOutAt)}
-                    </span>
-                  </div>
-
-                  <div className="col-span-3 flex items-center justify-end gap-2 flex-wrap">
-                    <span className="text-xs rounded-full border border-slate-200 bg-white px-2.5 py-1">
-                      {minutesToHM(m.totalWorkMinutes)}
-                    </span>
-                    <span className="text-xs rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-900">
-                      P {m.daysPresent}
-                    </span>
-                    <span className="text-xs rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-900">
-                      A {m.daysAbsent}
-                    </span>
-                  </div>
-                </div>
+                <MemberRow key={m.userId} member={m} />
               ))
             )}
           </div>
@@ -250,7 +263,109 @@ function TeamCard({
   );
 }
 
-export default function AdminDashboard() {
+function MemberRow({ member }: { member: MemberTodo }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="border-b border-slate-100">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full grid grid-cols-12 gap-0 px-4 py-3 hover:bg-slate-50/50 text-left"
+      >
+        <div className="col-span-4 min-w-0">
+          <div className="text-sm font-semibold text-slate-900 truncate">{member.username}</div>
+          <div className="text-xs text-slate-500 truncate">{member.email}</div>
+        </div>
+
+        <div className="col-span-3 flex items-center gap-2 min-w-0">
+          <StatusPill status={member.lastTodoStatus ?? "STATUS"} />
+          <span className="text-xs text-slate-600 truncate">
+            {member.lastTodoTitle ? member.lastTodoTitle : "—"}
+          </span>
+        </div>
+
+        <div className="col-span-2 flex items-center gap-3">
+          <span className="text-xs font-semibold text-slate-900">{member.completionRate}%</span>
+          <div className="flex-1">
+            <ProgressBar pct={member.completionRate} />
+          </div>
+        </div>
+
+        <div className="col-span-3 flex items-center justify-end gap-2 flex-wrap">
+          <span className="text-xs rounded-full border border-slate-200 bg-white px-2.5 py-1">
+            {member.totalTodos} todos
+          </span>
+          <span className="text-xs rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-900">
+            C {member.completed}
+          </span>
+          <span className="text-xs rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-rose-900">
+            I {member.incomplete}
+          </span>
+          <span className="text-xs rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-900">
+            S {member.pending}
+          </span>
+
+          <span className="ml-2 text-xs text-slate-500">
+            {open ? "Hide" : "Show"} todos
+          </span>
+          <span className={cn("h-9 w-9 grid place-items-center rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform", open ? "rotate-180" : "rotate-0")}>
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path
+                d="M5 8l5 5 5-5"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4">
+          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/60 flex items-center justify-between gap-3">
+              <div className="text-xs font-semibold text-slate-700">Todos</div>
+              <div className="text-xs text-slate-500">
+                Latest update: {fmtDateTime(member.lastUpdatedAt)}
+              </div>
+            </div>
+
+            {member.todos.length === 0 ? (
+              <div className="px-4 py-6 text-sm text-slate-600">No todos in this range.</div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {member.todos.map((t) => (
+                  <div key={t.id} className="px-4 py-3 hover:bg-slate-50/40">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="text-sm font-semibold text-slate-900">{t.title}</div>
+                          <StatusPill status={t.status} />
+                          <span className="text-xs rounded-full border border-slate-200 bg-white px-2 py-1 text-slate-700">
+                            {t.day}
+                          </span>
+                        </div>
+                        {t.note ? <div className="mt-1 text-sm text-slate-600">{t.note}</div> : null}
+                        <div className="mt-2 text-xs text-slate-500">
+                          Created: {fmtDateTime(t.createdAt)} • Updated: {fmtDateTime(t.updatedAt)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function AdminTasks() {
   const today = useMemo(() => toISO(new Date()), []);
   const monthStart = useMemo(() => {
     const d = new Date();
@@ -261,7 +376,7 @@ export default function AdminDashboard() {
   // Filters
   const [fromDay, setFromDay] = useState<string>(monthStart);
   const [toDay, setToDay] = useState<string>(today);
-  const [status, setStatus] = useState<"all" | "present" | "absent" | "checkedin">("all");
+  const [status, setStatus] = useState<"all" | "complete" | "incomplete" | "status">("all");
   const [q, setQ] = useState<string>("");
 
   // Pagination (teams/leads)
@@ -270,8 +385,15 @@ export default function AdminDashboard() {
 
   // Data
   const [loading, setLoading] = useState(false);
-  const [teams, setTeams] = useState<TeamBlock[]>([]);
+  const [teams, setTeams] = useState<TeamTodoBlock[]>([]);
   const [totalTeams, setTotalTeams] = useState<number>(0);
+  const [overall, setOverall] = useState<ApiResponse["overall"]>({
+    total: 0,
+    completed: 0,
+    incomplete: 0,
+    pending: 0,
+    completionRate: 0,
+  });
   const [err, setErr] = useState<string | null>(null);
 
   // Expand/collapse (leadId -> boolean)
@@ -284,7 +406,7 @@ export default function AdminDashboard() {
   async function loadAdminTeams(next?: Partial<{
     fromDay: string;
     toDay: string;
-    status: "all" | "present" | "absent" | "checkedin";
+    status: "all" | "complete" | "incomplete" | "status";
     q: string;
     page: number;
     pageSize: number;
@@ -316,22 +438,36 @@ export default function AdminDashboard() {
         pageSize: String(effective.pageSize),
       });
 
-      const data = await fetchJson<ApiResponse>(`/api/admin/attendance/teams?${qs.toString()}`);
+      const data = await fetchJson<ApiResponse>(`/api/admin/todos/teams?${qs.toString()}`);
       const nextTeams = Array.isArray(data.teams) ? data.teams : [];
 
       setTeams(nextTeams);
       setTotalTeams(typeof data.totalTeams === "number" ? data.totalTeams : nextTeams.length);
 
+      if (data.overall) {
+        setOverall(data.overall);
+      } else {
+        // fallback compute from visible
+        const allTodos = nextTeams.flatMap((tb) => tb.members.flatMap((m) => m.todos));
+        const total = allTodos.length;
+        const completed = allTodos.filter((x) => x.status === "COMPLETE").length;
+        const incomplete = allTodos.filter((x) => x.status === "INCOMPLETE").length;
+        const pending = allTodos.filter((x) => x.status === "STATUS").length;
+        const completionRate = total === 0 ? 0 : Math.round((completed / total) * 100);
+        setOverall({ total, completed, incomplete, pending, completionRate });
+      }
+
       // keep expanded state for existing ids, default collapsed for new ones
       setExpanded((prev) => {
         const copy: Record<string, boolean> = { ...prev };
-        for (const t of nextTeams) if (!(t.leadId in copy)) copy[t.leadId] = false;
+        for (const tt of nextTeams) if (!(tt.leadId in copy)) copy[tt.leadId] = false;
         return copy;
       });
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Failed to load admin attendance");
+      setErr(e instanceof Error ? e.message : "Failed to load admin tasks");
       setTeams([]);
       setTotalTeams(0);
+      setOverall({ total: 0, completed: 0, incomplete: 0, pending: 0, completionRate: 0 });
     } finally {
       setLoading(false);
     }
@@ -370,13 +506,13 @@ export default function AdminDashboard() {
         <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur shadow-sm p-6">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="space-y-1">
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Attendance</h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Tasks</h1>
               <p className="text-sm text-slate-600">
-                Team-wise attendance across all Team Leads and Members.
+                Team-wise todos across all Team Leads and Members.
               </p>
               <p className="text-xs text-slate-500">
                 Range: {fromDay} → {toDay} • Status:{" "}
-                {status === "all" ? "All" : status === "present" ? "Present" : status === "absent" ? "Absent" : "Checked-in"}
+                {status === "all" ? "All" : status === "complete" ? "Complete" : status === "incomplete" ? "Incomplete" : "Status"}
                 {q.trim() ? ` • Search: “${q.trim()}”` : ""}
               </p>
             </div>
@@ -399,7 +535,46 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          {/* Filters row (schedule-like controls) */}
+          {/* Overall stats */}
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-5 gap-3">
+            <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur shadow-sm p-5 md:col-span-2">
+              <div className="text-xs font-medium text-slate-500">Overall completion rate</div>
+              <div className="mt-1 flex items-end justify-between gap-3">
+                <div className="text-2xl font-semibold text-slate-900">{overall?.completionRate ?? 0}%</div>
+                <div className="text-xs text-slate-500">all teams (visible filters)</div>
+              </div>
+              <div className="mt-3">
+                <ProgressBar pct={overall?.completionRate ?? 0} />
+              </div>
+
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <SummaryChip label="Todos" value={String(overall?.total ?? 0)} />
+                <SummaryChip label="Complete" value={String(overall?.completed ?? 0)} tone="emerald" />
+                <SummaryChip label="Incomplete" value={String(overall?.incomplete ?? 0)} tone="rose" />
+                <SummaryChip label="Status" value={String(overall?.pending ?? 0)} tone="amber" />
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur shadow-sm p-5">
+              <div className="text-xs font-medium text-slate-500">Total Todos</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">{overall?.total ?? 0}</div>
+              <div className="mt-1 text-xs text-slate-500">Across all teams</div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur shadow-sm p-5">
+              <div className="text-xs font-medium text-slate-500">Completed</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">{overall?.completed ?? 0}</div>
+              <div className="mt-1 text-xs text-slate-500">Across all teams</div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur shadow-sm p-5">
+              <div className="text-xs font-medium text-slate-500">Incomplete</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">{overall?.incomplete ?? 0}</div>
+              <div className="mt-1 text-xs text-slate-500">Across all teams</div>
+            </div>
+          </div>
+
+          {/* Filters row */}
           <div className="mt-6 grid grid-cols-1 md:grid-cols-12 gap-3">
             <div className="md:col-span-3">
               <label className="block text-xs font-medium text-slate-600 mb-1">From</label>
@@ -426,15 +601,15 @@ export default function AdminDashboard() {
               <select
                 value={status}
                 onChange={(e) => {
-                  setStatus(e.target.value as "all" | "present" | "absent" | "checkedin");
+                  setStatus(e.target.value as "all" | "complete" | "incomplete" | "status");
                   setPage(1);
                 }}
                 className="w-full h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-slate-200"
               >
                 <option value="all">All</option>
-                <option value="present">Present</option>
-                <option value="checkedin">Checked-in</option>
-                <option value="absent">Absent</option>
+                <option value="complete">Complete</option>
+                <option value="incomplete">Incomplete</option>
+                <option value="status">Status</option>
               </select>
             </div>
 
@@ -443,7 +618,7 @@ export default function AdminDashboard() {
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search lead or member..."
+                placeholder="Search lead / member / task..."
                 className="w-full h-11 rounded-2xl border border-slate-200 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-slate-200"
               />
             </div>
@@ -499,7 +674,6 @@ export default function AdminDashboard() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
-                  // expand all visible
                   setExpanded((prev) => {
                     const copy = { ...prev };
                     for (const t of teams) copy[t.leadId] = true;
@@ -512,7 +686,6 @@ export default function AdminDashboard() {
               </button>
               <button
                 onClick={() => {
-                  // collapse all visible
                   setExpanded((prev) => {
                     const copy = { ...prev };
                     for (const t of teams) copy[t.leadId] = false;
@@ -529,9 +702,7 @@ export default function AdminDashboard() {
           {teams.length === 0 && !loading && !err ? (
             <div className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur p-10 shadow-sm text-center">
               <div className="text-base font-semibold text-slate-900">No data</div>
-              <div className="mt-1 text-sm text-slate-600">
-                Try changing date range or filters.
-              </div>
+              <div className="mt-1 text-sm text-slate-600">Try changing date range or filters.</div>
             </div>
           ) : (
             <div className="space-y-4">
